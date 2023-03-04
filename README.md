@@ -1,0 +1,1 @@
+This is following along to Functional Programming Simplified by Alvin Alexander (2017).  It's in Scala.
