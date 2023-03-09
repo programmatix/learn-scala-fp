@@ -1,3 +1,6 @@
+import Main.BehavesLikeHuman
+
+import java.awt.Color
 import java.util.concurrent.ThreadLocalRandom
 import scala.annotation.tailrec
 import scala.collection.immutable.HashSet
@@ -147,7 +150,7 @@ object Main extends App {
   val partialFuncResult: String = isVeryTasty(donut)
 
   val unknownTaste: PartialFunction[String, String] = {
-    case donut: _ => s"Unknown taste for donut = $donut"
+    case donut @ _ => s"Unknown taste for donut = $donut"
   }
 
   val willMatchAll: PartialFunction[String, String] = isVeryTasty orElse unknownTaste
@@ -480,7 +483,7 @@ object Main extends App {
   // This could help: https://www.reddit.com/r/scala/comments/ehkzrq/state_monad_learn_how_it_works/
   //
   // Something the book doesn't do a good job on - _why_ I'd want to write code like this, instead of a simpler
-  // procedural style.  It's deferring all state manipulation until runtime (impure core) - but at quite a cost of
+  // procedural style.  It's deferring all state manipulation until runtime (allowing pure core) - but at quite a cost of
   // complexity.
 
 
@@ -513,7 +516,450 @@ object Main extends App {
 //  println(s"Final SumState: ${result}")
 
 
-  // Cats
 
+
+  // Domain modelling.
+  // OOP puts data with its functions.  FP doesn't.
+  // FP generally models data as case classes and sealed trait enums.  Immutable data of course.
+  // These will usually not have methods.
+  // Those methods could go into a Utils class or a companion object.  But it's not the best way.
+  // Best way is modules.
+
+  // First, covering the self-type trick:
+
+  def selfType() {
+    trait Animal
+    abstract class AnimalWithTail(tailColor: String) extends Animal
+    trait DogTailServices {
+      // implementers must be a sub-type of AnimalWithTail
+      this: AnimalWithTail =>
+    }
+  }
+
+
+  // Modules:
+  // Basically, put the methods in traits instead of objects.  And then "mixin" them together to assemble interfaces.
+  // Apart from anything, this gives us the same advantages as using interfaces in Java - we can use a Database
+  // trait and have that swapped out for a mocked implementation in testing.
+  trait Animal
+
+  abstract class AnimalWithTail(tailColor: Color) extends Animal
+
+  trait DogTailServices {
+    this: AnimalWithTail =>
+    def wagTail = println("wagging tail")
+
+    def lowerTail = println("lowering tail")
+
+    def raiseTail = println("raising tail")
+  }
+
+  trait DogMouthServices {
+    this: AnimalWithTail =>
+    def bark = println("bark!")
+
+    def lick = println("licking")
+  }
+
+  // Now we "mixin" the desired modules
+  object IrishSetter
+    extends AnimalWithTail(Color.RED)
+      with DogTailServices
+      with DogMouthServices
+
+  IrishSetter.bark
+  IrishSetter.wagTail
+
+
+  // Another example, modelling pizza domain:
+  case class Pizza(crustSize: CrustSize,
+                    crustType: CrustType,
+                    toppings: Seq[Topping])
+  case class Order(pizzas: Seq[Pizza], customer: Customer)
+  case class Customer(name: String, phone: String, address: Address)
+
+  case class Address(street1: String,
+                      street2: Option[String],
+                      city: String,
+                      state: String,
+                      zipCode: String)
+
+  sealed trait Topping
+  case object Cheese extends Topping
+  case object Pepperoni extends Topping
+  case object Sausage extends Topping
+  case object Mushrooms extends Topping
+  case object Onions extends Topping
+
+  sealed trait CrustSize
+  case object SmallCrustSize extends CrustSize
+  case object MediumCrustSize extends CrustSize
+  case object LargeCrustSize extends CrustSize
+
+  sealed trait CrustType
+  case object RegularCrustType extends CrustType
+  case object ThinCrustType extends CrustType
+  case object ThickCrustType extends CrustType
+
+  // Now sketch the API we'd like in say PizzaServiceInterface:
+//  val p1 = addTopping(p, Pepperoni)
+//  val p2 = addTopping(p1, Mushrooms)
+//  val p3 = updateCrustType(p2, ThickCrustType)
+//  val p4 = updateCrustSize(p3, LargeCrustSize)
+
+  // Now sketch out PizzaServiceInterface.
+
+  type Money = BigDecimal
+
+  trait PizzaServiceInterface {
+    def addTopping(p: Pizza, t: Topping): Pizza
+
+    def removeTopping(p: Pizza, t: Topping): Pizza
+
+    def removeAllToppings(p: Pizza): Pizza
+
+    def updateCrustSize(p: Pizza, cs: CrustSize): Pizza
+
+    def updateCrustType(p: Pizza, ct: CrustType): Pizza
+
+    def calculatePizzaPrice(p: Pizza,
+                             toppingsPrices: Map[Topping, Money],
+                             crustSizePrices: Map[CrustSize, Money],
+                             crustTypePrices: Map[CrustType, Money]
+                           ): Money
+  }
+
+  // Looks good, now a concrete implementation (separating the two is optional but apparently good API design):
+  trait PizzaService extends PizzaServiceInterface {
+    def addTopping(p: Pizza, t: Topping): Pizza = {
+      val newToppings = p.toppings :+ t
+      p.copy(toppings = newToppings)
+    }
+
+    def removeTopping(p: Pizza, t: Topping): Pizza = {
+      p.copy(toppings = p.toppings.filterNot(_ == t))
+    }
+
+    def removeAllToppings(p: Pizza): Pizza = {
+      val newToppings = Seq[Topping]()
+      p.copy(toppings = newToppings)
+    }
+
+    def updateCrustSize(p: Pizza, cs: CrustSize): Pizza = {
+      p.copy(crustSize = cs)
+    }
+
+    def updateCrustType(p: Pizza, ct: CrustType): Pizza = {
+      p.copy(crustType = ct)
+    }
+
+    def calculatePizzaPrice(
+                             p: Pizza,
+                             toppingsPrices: Map[Topping, Money],
+                             crustSizePrices: Map[CrustSize, Money],
+                             crustTypePrices: Map[CrustType, Money]
+                           ): Money = {
+      val base = BigDecimal(10)
+      val numToppings = p.toppings.size
+      val price = base + 1.00 * numToppings
+      price
+    }
+  }
+
+  // Now adding databases:
+
+  trait PizzaDaoInterface {
+    def getToppingPrices(): Map[Topping, Money]
+    def getCrustSizePrices(): Map[CrustSize, Money]
+    def getCrustTypePrices(): Map[CrustType, Money]
+  }
+
+  // And can have various implementations of it - mock, dev, prod:
+  object MockPizzaDao extends PizzaDaoInterface {
+    def getToppingPrices(): Map[Topping, Money] = {
+      Map(
+        Cheese -> BigDecimal(1),
+        Pepperoni -> BigDecimal(1),
+        Sausage -> BigDecimal(1),
+        Mushrooms -> BigDecimal(1)
+      )
+    }
+
+    def getCrustSizePrices(): Map[CrustSize, Money] = {
+      Map(
+        SmallCrustSize -> BigDecimal(0),
+        MediumCrustSize -> BigDecimal(1),
+        LargeCrustSize -> BigDecimal(2)
+      )
+    }
+
+    def getCrustTypePrices(): Map[CrustType, Money] = {
+      Map(
+        RegularCrustType -> BigDecimal(0),
+        ThickCrustType -> BigDecimal(1),
+        ThinCrustType -> BigDecimal(1)
+      )
+    }
+  }
+
+  // Now ordering:
+  trait OrderServiceInterface {
+    // implementing classes should provide their own database
+    // that is an instance of PizzaDaoInterface, such as
+    // MockPizzaDao, TestPizzaDao, or ProductionPizzaDao
+    protected def database: PizzaDaoInterface
+
+    def calculateOrderPrice(o: Order): Money
+  }
+
+  trait AbstractOrderService extends OrderServiceInterface {
+    // create a concrete implementation of the trait so we
+    // can use its `calculatePizzaPrice` function
+    // Also called "reifying" the trait (because we can't call methods on a trait directly of course)
+    // Reifying = taking an abstract concept and making it concrete.
+    object PizzaService extends PizzaService
+
+    // all implementations of this trait will use these functions,
+    // so go ahead and define them here
+    private lazy val toppingPricesMap = database.getToppingPrices()
+    private lazy val crustSizePricesMap = database.getCrustSizePrices()
+    private lazy val crustTypePricesMap = database.getCrustTypePrices()
+
+    // the publicly-available service
+    def calculateOrderPrice(o: Order): Money =
+      calculateOrderPriceInternal(
+        o,
+        toppingPricesMap,
+        crustSizePricesMap,
+        crustTypePricesMap
+      )
+
+    private def calculateOrderPriceInternal(o: Order,
+                                             toppingPrices: Map[Topping, Money],
+                                             crustSizePrices: Map[CrustSize, Money],
+                                             crustTypePrices: Map[CrustType, Money]
+                                           ): Money = {
+      val pizzaPrices: Seq[Money] = for {
+        pizza <- o.pizzas
+      } yield {
+        PizzaService.calculatePizzaPrice(
+          pizza,
+          toppingPrices,
+          crustSizePrices,
+          crustTypePrices
+        )
+      }
+      pizzaPrices.sum
+    }
+  }
+
+
+  // Now a bit more mixins to create a final concrete order service
+  object MockDbOrderService extends AbstractOrderService {
+    val database = MockPizzaDao
+  }
+
+  // MockDbOrderService.calculateOrderPrice(order)
+
+  // Ok so essentially it's interface driven development.  But with static functions.
+  // Similar tradeoffs & benefits to using interfaces everywhere.
+  // Presumably would only use this where these abstractions were actually useful.  Like with databases.
+
+  // In his API design he's generally not doing obj.copy(foo = "bar").  Instead having a
+  // changeFooTo("bar") method in a trait, then implemented by an object.
+
+  // He says the benefits of this approach become clearer as you scale up.
+  // E.g. can add more stuff easily:
+
+  sealed trait Product
+  trait PizzaProduct extends Product
+  trait Breadsticks extends Product
+  trait Cheesesticks extends Product
+  trait Beverage extends Product
+  trait BottledBeverage extends Beverage
+  trait CannedBeverage extends Beverage
+
+  trait OrderServicesInterface {
+    def addProductToOrder(o: Order, p: Product): Order
+    // ...
+  }
+
+  // Then presumably I'd have a BottleBeverageOrderService that would mixin everything required.
+  // "Programming in Scala" goes into it more - "Modular Programming Using Objects".
+  // And "Functional and Reactive Domain Modelling"
+
+
+  // An alternative to modules are functional objects.
+  // Basically what I did in the Scala SDK - put methods on the class that return new copies.
+  // Feels much more intuitive to me.
+  // Also the approach used by Scala collections.  E.g. list.map()
+  case class Pizza2(crustSize: CrustSize,
+                    crustType: CrustType,
+                    val toppings: Seq[Topping]) {
+    def addTopping(t: Topping): Pizza2 = ???
+
+    def removeTopping(t: Topping): Pizza2 = ???
+
+    def removeAllToppings(): Pizza2 = ???
+
+    def updateCrustSize(cs: CrustSize): Pizza2 = ???
+
+    def updateCrustType(ct: CrustType): Pizza2 = ???
+
+    def getPrice(
+                  toppingPrices: Map[Topping, Money],
+                  crustSizePrices: Map[CrustSize, Money],
+                  crustTypePrices: Map[CrustType, Money]
+                ): Money = ???
+  }
+
+  // He doesn't recommend between either approach.  He likes visually the functional object style,
+  // as do I.
+
+
+  // Scalacheck.
+
+  def increaseRandomly (i: Int): Long = {
+    val randomNum = scala.util.Random.nextInt(100) + 1L
+    i + randomNum
+  }
+
+  import org.scalacheck.Prop.forAll
+  import org.scalacheck.{Arbitrary, Gen, Properties}
+
+  object IncreaseRandomlySpec extends Properties("IncreaseRandomlySpec") {
+    property("increaseRandomly") = forAll { input: Int =>
+      val result = increaseRandomly(input)
+      result > input
+    }
+  }
+
+  IncreaseRandomlySpec.main(Array())
+
+
+  // He recommends using Try for network and file ops, rather than an IO-like thing.
+  // Mainly because you're probably already using Try, and mixing monads requires complex techniques like monad transformers.
+
+
+  // Type classes.
+  // Let you add new methods to existing classes.
+  // Two different tehniques allowing two different results:
+  // 1. BehavesLikeHuman.speak(aDog)            ("Interface objects")
+  // 2. aDog.speak                              ("Interface syntax")
+
+  // Let's see if I can do both...
+
+  case class Dog(name: String)
+
+  def typeClass1() {
+
+    trait BehavesLikeHuman[A] {
+      def speak(in: A): Unit
+    }
+
+    object BehavesLikeHuman {
+      def speak[A](a: A)(implicit b: BehavesLikeHuman[A]) = {
+        b.speak(a)
+      }
+    }
+
+    object DogBehavesLikeHuman1 {
+      implicit val dogBehavesLikeHuman = Main.BehavesLikeHuman1[Dog] {
+        def speak(in: Dog) = println(`Bark! My name is ${in.name}`)
+      }
+    }
+
+
+    val dog = Dog("bob")
+
+    BehavesLikeHuman.speak(dog)
+  }
+
+  def typeClass2(): Unit = {
+    trait AddSpeak {
+      def speak
+    }
+
+    object AddSpeakUtil {
+      implicit def forDog(in: Dog) = AddSpeak {
+        def speak = "Bark!"
+      }
+    }
+
+    import AddSpeakUtil._
+
+    val dog = Dog("bob")
+    dog.speak
+  }
+
+  // Nailed it!
+
+
+
+  // Lenses
+
+  case class User(
+                   id: Int,
+                   name: Name,
+                   billingInfo: BillingInfo,
+                   phone: String,
+                   email: String
+                 )
+
+  case class Name(
+                   firstName: String,
+                   lastName: String
+                 )
+
+  case class Address(
+                      street1: String,
+                      street2: String,
+                      city: String,
+                      state: String,
+                      zip: String
+                    )
+
+  case class CreditCard(
+                         name: Name,
+                         number: String,
+                         month: Int,
+                         year: Int,
+                         cvv: String
+                       )
+
+  case class BillingInfo(
+                          creditCards: Seq[CreditCard]
+                        )
+
+  val user = User(
+    id = 1,
+    name = Name(
+      firstName = "Al",
+      lastName = "Alexander"
+    ),
+    billingInfo = BillingInfo(
+      creditCards = Seq(
+        CreditCard(
+          name = Name("Al", "Alexander"),
+          number = "1111111111111111",
+          month = 3,
+          year = 2020,
+          cvv = ""
+        )
+      )
+    ),
+    phone = "907-555-1212",
+    email = "al@al.com"
+  )
+
+  // Quicklens allows:
+  import com.softwaremill.quicklens._
+
+  val newUser = user.modify(_.phone).setTo("720-555-1212")
+    .modify(_.email).setTo("al@example.com")
+    .modify(_.name.firstName).setTo("Alvin")
+
+
+  // Alternatives: goggle, monacle, shapeless
 
 }
